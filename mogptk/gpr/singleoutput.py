@@ -267,6 +267,55 @@ class SquaredExponentialKernel(Kernel):
         X1, _ = self._active_input(X1)
         return self.magnitude().repeat(X1.shape[0])
 
+class SquaredExponentialKernelDeriv(Kernel):
+    """
+    A kernel of the 1D derivative of a GP having a squared exponential kernel, given by: 
+    
+    $$ K(x,x') = \\sigma^2 \\exp\\left(-\\frac{1}{2}\\tau^TM\\tau\\right) $$
+    
+    with \\(M = l^{-2}I\\.
+    Note that the kernel only involves the covariance of the derivative with itself and not the covariance between the derivative and the original process (cross-terms), as the "derivative" w.r.t to multiple dimensions is a gradient and would become a multioutput process.
+    Args:
+        input_dims (int): Number of input dimensions.
+        active_dims (list of int): Indices of active dimensions of shape (input_dims,).
+
+    Attributes:
+        magnitude (mogptk.gpr.parameter.Parameter): Magnitude \\(\\sigma^2\\) a scalar.
+        lengthscale (mogptk.gpr.parameter.Parameter): Lengthscale \\(l\\) a scalar.
+    """
+    def __init__(self, input_dims=1, active_dims=None):
+        super().__init__(input_dims, active_dims)
+        
+        magnitude = 1.0
+        lengthscale = 1.0
+        # if order == 0:
+        # lengthscale = torch.ones(input_dims)
+
+        # self.order = order
+        self.magnitude = Parameter(magnitude, lower=config.positive_minimum)
+        self.lengthscale = Parameter(lengthscale, lower=config.positive_minimum)
+
+    def K(self, X1, X2=None):
+        # X has shape (data_points,input_dims)
+        X1, X2 = self._active_input(X1, X2)
+        tau = self.distance(X1,X2)  # NxMxD
+        # if self.order == -1:
+        invlengthscale_sq = 1.0/self.lengthscale()**2
+        invlengthscale_sq_diag = invlengthscale_sq.repeat(self.input_dims).diag()  # DxD
+        # elif self.order == 0:
+        #     lengthscale = (1.0/self.lengthscale()**2).diag()  # DxD
+        K = torch.exp(-0.5 * torch.einsum("nmi,ij,nmj->nm", tau, invlengthscale_sq_diag, tau))
+        # 1 / l**2
+        a = torch.ones_like(K) * invlengthscale_sq
+        # 1 / l**2 - tau / l**4
+        a = a - torch.einsum("nmi,ij,ij,nmj->nm", tau, invlengthscale_sq_diag, invlengthscale_sq_diag, tau)
+        return self.magnitude() * a * K
+
+    def K_diag(self, X1):
+        # X has shape (data_points,input_dims)
+        X1, _ = self._active_input(X1)
+        return self.magnitude().repeat(X1.shape[0]) * (1.0/self.lengthscale()**2)
+
 class RationalQuadraticKernel(Kernel):
     """
     A rational quadratic kernel given by
