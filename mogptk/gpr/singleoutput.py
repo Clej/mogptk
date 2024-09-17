@@ -300,7 +300,7 @@ class SquaredExponentialKernelDeriv(Kernel):
         X1, X2 = self._active_input(X1, X2)
         tau = self.distance(X1,X2)  # NxMxD
         # if self.order == -1:
-        invlengthscale_sq = 1.0/self.lengthscale().pow(2)
+        invlengthscale_sq = 1 / self.lengthscale().pow(2)
         invlengthscale_sq_diag = invlengthscale_sq.repeat(self.input_dims).diag()  # DxD
         # elif self.order == 0:
         #     lengthscale = (1.0/self.lengthscale()**2).diag()  # DxD
@@ -315,7 +315,7 @@ class SquaredExponentialKernelDeriv(Kernel):
     def K_diag(self, X1):
         # X has shape (data_points,input_dims)
         X1, _ = self._active_input(X1)
-        return self.magnitude().repeat(X1.shape[0]) * self.lengthscale().repeat(X1.shape[0]).pow(2)
+        return self.magnitude().repeat(X1.shape[0]) * (1 / self.lengthscale().repeat(X1.shape[0]).pow(2))
 
 class RationalQuadraticKernel(Kernel):
     """
