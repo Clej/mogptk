@@ -300,21 +300,22 @@ class SquaredExponentialKernelDeriv(Kernel):
         X1, X2 = self._active_input(X1, X2)
         tau = self.distance(X1,X2)  # NxMxD
         # if self.order == -1:
-        invlengthscale_sq = 1.0/self.lengthscale()**2
+        invlengthscale_sq = 1.0/self.lengthscale().pow(2)
         invlengthscale_sq_diag = invlengthscale_sq.repeat(self.input_dims).diag()  # DxD
         # elif self.order == 0:
         #     lengthscale = (1.0/self.lengthscale()**2).diag()  # DxD
-        K = torch.exp(-0.5 * torch.einsum("nmi,ij,nmj->nm", tau, invlengthscale_sq_diag, tau))
+        exp_ = torch.exp(-0.5 * torch.einsum("nmi,ij,nmj->nm", tau, invlengthscale_sq_diag, tau)) # NxM
         # 1 / l**2
-        a = torch.ones_like(K) * invlengthscale_sq
+        a = torch.ones_like(exp_) * invlengthscale_sq
+        # a = torch.kron(invlengthscale_sq_diag, torch.ones_like(K))
         # 1 / l**2 - tau / l**4
         a = a - torch.einsum("nmi,ij,ij,nmj->nm", tau, invlengthscale_sq_diag, invlengthscale_sq_diag, tau)
-        return self.magnitude() * a * K
+        return self.magnitude() * a * exp_
 
     def K_diag(self, X1):
         # X has shape (data_points,input_dims)
         X1, _ = self._active_input(X1)
-        return self.magnitude().repeat(X1.shape[0]) * (1.0/self.lengthscale()**2)
+        return self.magnitude().repeat(X1.shape[0]) * self.lengthscale().repeat(X1.shape[0]).pow(2)
 
 class RationalQuadraticKernel(Kernel):
     """
