@@ -884,3 +884,131 @@ class Hensman(SparseHensman):
     """
     def __init__(self, kernel, X, y, likelihood=GaussianLikelihood(1.0), jitter=1e-8, mean=None):
         super().__init__(kernel, X, y, None, 'grid', likelihood, jitter, mean)
+
+
+class Laplace(Model):
+    """
+    Laplace approximation for log-concave (non-Gaussian) likelihoods.
+
+        Args:
+        kernel (mogptk.gpr.kernel.Kernel): Kernel.
+        X (torch.tensor): Input data of shape (data_points,input_dims).
+        y (torch.tensor): Output data of shape (data_points,).
+        likelihood (mogptk.gpr.likelihood.Likelihood): Likelihood.
+        jitter (float): Relative jitter of the diagonal's mean added to the kernel's diagonal before calculating the Cholesky.
+        mean (mogptk.gpr.mean.Mean): Mean.
+
+    # TODO: Rasmussen ref + Williams ref
+    [1] Rasm, et al., "Scalable Variational Gaussian Process Classification", 2006
+    """
+    def __init__(self, kernel, X, y, likelihood=GaussianLikelihood(1.0), jitter=1e-8, mean=None):
+        super().__init__(kernel, X, y, likelihood, jitter, mean)
+
+        # Mode of approx posterior
+        self.f_mode = Parameter(torch.zeros(self.X.shape[0], 1))
+        
+        # following are used for training and inference
+        self.eye = torch.eye(self.X.shape[0], device=config.device, dtype=config.dtype)
+        # Hessian log-likelihood
+        self.W = torch.eye(self.X.shape[0], device=config.device, dtype=config.dtype)
+        # Gradient log-likelihood
+        self.grad_at_mode = torch.ones(
+            self.X.shape[0], device=config.device, dtype=config.dtype
+        ).unsqueeze(1)
+        # Cholesky for inverting the Hessian
+        self.L = self.W.tril()
+        # for W^(1/2)@K_XX
+        self.W_sqrt_K = torch.eye(self.X.shape[0], device=config.device, dtype=config.dtype)
+
+    def _ll(self, f):
+        if self.mean is not None:
+            y = self.y - self.mean(self.X).reshape(-1,1)  # Nx1
+        else:
+            y = self.y  # Nx1
+        return self.likelihood.log_prob(X=self.X, y=y, f=f).sum()
+
+    def hessian_ll(self, f):
+        """
+        Hessian of the log-likelihood of $p(y|f)$ wrt $f$.
+        """
+        # false if in inference mode
+        training = not torch.is_inference_mode_enabled()
+        return torch.autograd.functional.hessian(
+            func=self._ll,
+            create_graph=training,
+            inputs=f,
+            strict=True
+        )
+    
+    def grad_ll(self, f):
+        """
+        Gradient of the log-likelihood of $p(y|f)$ wrt $f$.
+        """
+        # false if in inference mode
+        training = not torch.is_inference_mode_enabled()
+        return torch.autograd.functional.jacobian(
+            func=self._ll,
+            create_graph=training,
+            inputs=f,
+            strict=True
+        )
+
+    def _cholesky_B(self, f):
+        """$B = I + W^(1/2) K W^(1/2)$ where W is Hessian log-likelihood at f."""
+
+        # negative Hessian log-likelihood at likelihood mode
+        self.W = -1. * self.hessian_ll(f).squeeze()
+        self.W = self.W.diag().diagflat() # ensure that off-diag are exact zeros
+        # Compute B
+        W_sqrt = self.W.sqrt()
+        self.Wsqrt_K = W_sqrt.mm(self.kernel(self.X, self.X))       
+        self.B = self.Wsqrt_K.mm(W_sqrt)
+
+        # Cholesky
+        self.B = 0.5 * (self.B + self.B.T)
+        self.B += self.eye
+        self.B = self.B.clamp(min=config.positive_minimum)
+        return self._cholesky(self.B, add_jitter=True) # NxN
+
+    def log_marginal_likelihood(self):
+
+        self.L = self._cholesky_B(self.f_mode())
+        self.grad_at_mode = self.grad_ll(self.f_mode())
+        b = self.W.mm(self.f_mode()) + self.grad_at_mode
+        a = torch.linalg.solve_triangular(self.L, self.Wsqrt_K.mm(b), upper=False)
+        a = torch.linalg.solve_triangular(self.W.sqrt().mm(self.L.T), a, upper=False)
+        a = b - a
+        f = self.kernel(self.X, self.X).mm(a)
+        return -0.5 * a.T.mm(f) + self._ll(f) - self.L.diag().log().sum()
+
+    def _predict_f(self, X, full=False):
+
+        X = self._check_input(X)
+
+        # get the gradient out of the computational graph
+        # as Hessian and Jacobian have been learned and characterize
+        # the approximate posterior
+        self.L = self.L.detach()
+        self.grad_at_mode = self.grad_at_mode.detach()
+
+        Kfs = self.kernel(self.X, X) # NxM
+        f_mu = Kfs.T.mm(self.grad_at_mode) # Mx1
+
+        v = torch.linalg.solve_triangular(self.L, self.W.sqrt().mm(Kfs), upper=False)
+        if full:
+            Kss = self.kernel(X)  # MxM
+            var = Kss - v.T.mm(v)  # MxM
+        else:
+            Kss_diag = self.kernel.K_diag(X)  # M
+            var = Kss_diag - v.T.square().sum(dim=1)  # M
+            var = var.reshape(-1, 1)
+        return f_mu, var
+
+    def predict_f(self, X, full=False):
+        with torch.inference_mode():
+            X = self._check_input(X)  # MxD
+
+            mu, var = self._predict_f(X, full=full)
+            if self.mean is not None:
+                mu += self.mean(X).reshape(-1,1)  # Mx1
+            return mu, var

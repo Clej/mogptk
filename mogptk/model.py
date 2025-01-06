@@ -177,6 +177,21 @@ class Hensman:
             return gpr.Hensman(kernel, x, y, likelihood=self.likelihood, jitter=self.jitter, mean=mean)
         return gpr.SparseHensman(kernel, x, y, Z=self.inducing_points, Z_init=self.init_inducing_points, likelihood=self.likelihood, jitter=self.jitter, mean=mean)
 
+class Laplace:
+    """
+    Laplace inference for log-concave likelihoods.
+
+    Args:
+        likelihood (gpr.Likelihood): Likelihood $p(y|f)$.
+        jitter (float): Jitter added before calculating a Cholesky.
+    """
+    def __init__(self, likelihood=gpr.GaussianLikelihood(1.0), jitter=1e-6):
+        self.likelihood = likelihood
+        self.jitter = jitter
+    
+    def _build(self, kernel, x, y, y_err=None, mean=None):
+        return gpr.Laplace(kernel, x, y, likelihood=self.likelihood, jitter=self.jitter, mean=mean)
+
 class Model:
     def __init__(self, dataset, kernel, inference=Exact(), mean=None, name=None):
         """
@@ -930,7 +945,7 @@ class Model:
                 X[j*n:(j+1)*n,1] = np.array((start[j]+end[j])/2.0)
             else:
                 X[j*n:(j+1)*n,1] = np.linspace(start[j], end[j], n)
-        k = self.gpr.K(X).cpu().numpy()
+        k = self.gpr.K(X).detach().cpu().numpy()
             
         fig, ax = plt.subplots(1, 1, figsize=figsize, constrained_layout=True)
         if title is not None:
