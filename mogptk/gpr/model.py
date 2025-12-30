@@ -898,8 +898,7 @@ class Laplace(Model):
         jitter (float): Relative jitter of the diagonal's mean added to the kernel's diagonal before calculating the Cholesky.
         mean (mogptk.gpr.mean.Mean): Mean.
 
-    # TODO: Rasmussen ref + Williams ref
-    [1] Rasm, et al., "Scalable Variational Gaussian Process Classification", 2006
+    [1] C. E. Rasmussen & C. K. I. Williams, Gaussian Processes for Machine Learning, the MIT Press, 2006
     """
     def __init__(self, kernel, X, y, likelihood=GaussianLikelihood(1.0), jitter=1e-8, mean=None):
         super().__init__(kernel, X, y, likelihood, jitter, mean)
